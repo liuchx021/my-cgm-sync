@@ -1,0 +1,54 @@
+name: Custom CGM Sync
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '*/5 * * * *' # 每5分钟云端自动抓取一次
+  workflow_dispatch: # 允许我们手动点击运行
+
+jobs:
+  run-sync:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Run Direct Python Fetch
+      env:
+        USER: ${{ secrets.CGM_USER }}
+        PWD: ${{ secrets.CGM_PWD }}
+        BARK: ${{ secrets.BARK_KEY }}
+      run: |
+        python -c "
+        import requests, time, json
+
+        # 1. 登录硅基轻享接口（针对国内轻享独立网关）
+        login_url = 'https://qx.pro.jiaanzhineng.com/api/v1/login'
+        headers = {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
+        payload = {'phone': '${{ env.USER }}', 'password': '${{ env.PWD }}', 'type': 1}
+        
+        try:
+            res = requests.post(login_url, json=payload, headers=headers).json()
+            token = res.get('data', {}).get('token')
+            if not token:
+                print('登录失败，请检查手机号密码:', res)
+                exit(1)
+            
+            # 2. 抓取最新一笔血糖数据
+            data_url = 'https://qx.pro.jiaanzhineng.com/api/v1/cgm/latest'
+            headers['Authorization'] = f'Bearer {token}'
+            data_res = requests.get(data_url, headers=headers).json()
+            glucose_data = data_res.get('data', {})
+            
+            value = glucose_data.get('value')     # 血糖值
+            trend = glucose_data.get('trend_desc') # 趋势箭头
+            
+            if value:
+                # 3. 产生精美的 Bark 推送
+                msg = f'当前血糖: {value} mmol/L ({trend})'
+                bark_url = f'https://api.day.app/${{ env.BARK }}/{msg}'
+                requests.get(bark_url)
+                print('海德薇成功送信！:', msg)
+            else:
+                print('未能成功抓取到最新的有效血糖数据')
+        except Exception as e:
+            print('运行发生异常错误:', str(e))
+        "
